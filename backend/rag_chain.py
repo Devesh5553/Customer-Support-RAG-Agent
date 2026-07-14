@@ -8,10 +8,15 @@ from backend.memory import get_session_history
 from langchain_core.runnables.history import RunnableWithMessageHistory
 load_dotenv()
 
-llm = ChatGoogleGenerativeAI(
-    model="gemini-2.5-flash",
-    temperature=0.3,
-)
+from functools import lru_cache
+
+@lru_cache(maxsize=1)
+def get_llm():
+    return ChatGoogleGenerativeAI(
+        model="gemini-2.5-flash",
+        temperature=0.3,
+    )
+
 prompt = ChatPromptTemplate.from_messages(
     [
         (
@@ -34,25 +39,35 @@ Always answer professionally.
     ]
 )
 
-chain = prompt | llm
 
-conversation = RunnableWithMessageHistory(
-    chain,
-    get_session_history,
-    input_messages_key="question",
-    history_messages_key="history",
-)
+@lru_cache(maxsize=1)
+def get_conversation_chain():
+
+    chain = prompt | get_llm()
+
+    return RunnableWithMessageHistory(
+        chain,
+        get_session_history,
+        input_messages_key="question",
+        history_messages_key="history",
+    )
 
 def ask(question: str, session_id: str = "default"):
 
     docs = retrieve_documents(question)
 
+    if not docs:
+        return (
+            "I couldn't find that information in the knowledge base.",
+            [],
+        )
+
     context = "\n\n".join(
-        f"{doc.metadata['faq_id']}\n{doc.page_content}"
+        f"Source: {doc.metadata['faq_id']}\n{doc.page_content}"
         for doc in docs
     )
 
-    response = conversation.invoke(
+    response = get_conversation_chain().invoke(
         {
             "question": question,
             "context": context,
@@ -64,10 +79,11 @@ def ask(question: str, session_id: str = "default"):
         }
     )
 
-    sources = [
-        doc.metadata["faq_id"]
-        for doc in docs
-    ]
+    sources = list(
+        dict.fromkeys(
+            doc.metadata["faq_id"] for doc in docs
+        )
+    )
 
     return response.content, sources
 

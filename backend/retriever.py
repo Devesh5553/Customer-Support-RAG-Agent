@@ -1,3 +1,4 @@
+from functools import lru_cache
 from pathlib import Path
 
 from langchain_community.vectorstores import FAISS
@@ -9,37 +10,47 @@ from langchain_huggingface import HuggingFaceEmbeddings
 BASE_DIR = Path(__file__).resolve().parent.parent
 VECTORSTORE_PATH = BASE_DIR / "vectorstore"
 
-# -----------------------------
-# Embedding Model
-# -----------------------------
-embeddings = HuggingFaceEmbeddings(
-    model_name="BAAI/bge-small-en-v1.5"
-)
 
 # -----------------------------
-# Load FAISS Index
+# Cached Resources
 # -----------------------------
-db = FAISS.load_local(
-    str(VECTORSTORE_PATH),
-    embeddings,
-    allow_dangerous_deserialization=True
-)
-
-# -----------------------------
-# Create Retriever
-# -----------------------------
-retriever = db.as_retriever(
-    search_kwargs={"k": 3}
-)
+@lru_cache(maxsize=1)
+def get_embeddings():
+    return HuggingFaceEmbeddings(
+        model_name="BAAI/bge-small-en-v1.5"
+    )
 
 
+@lru_cache(maxsize=1)
+def get_vectorstore():
+    return FAISS.load_local(
+        str(VECTORSTORE_PATH),
+        get_embeddings(),
+        allow_dangerous_deserialization=True,
+    )
+
+
+@lru_cache(maxsize=1)
+def get_retriever():
+    return get_vectorstore().as_retriever(
+        search_type="mmr",
+        search_kwargs={
+            "k": 3,
+            "fetch_k": 10,
+        },
+    )
+
+
+# -----------------------------
+# Retrieval
+# -----------------------------
 def retrieve_documents(query: str):
-    """
-    Retrieve top-k relevant documents.
-    """
-    return retriever.invoke(query)
+    return get_retriever().invoke(query)
 
 
+# -----------------------------
+# Testing
+# -----------------------------
 if __name__ == "__main__":
 
     while True:
@@ -58,7 +69,6 @@ if __name__ == "__main__":
             print("=" * 70)
             print(f"Result {i}")
 
-            # Metadata
             if doc.metadata:
                 print("\nMetadata:")
                 for key, value in doc.metadata.items():
@@ -66,4 +76,5 @@ if __name__ == "__main__":
 
             print("\nContent:\n")
             print(doc.page_content)
+
             print("=" * 70)
